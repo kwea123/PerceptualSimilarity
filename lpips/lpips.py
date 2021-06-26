@@ -9,10 +9,18 @@ import numpy as np
 from . import pretrained_networks as pn
 import torch.nn
 
-import lpips
+# import lpips
+from . import *
 
-def spatial_average(in_tens, keepdim=True):
-    return in_tens.mean([2,3],keepdim=keepdim)
+def spatial_average(in_tens, mask=None, keepdim=True):
+    """
+    mask: None or (B, 1, H, W)
+    """
+    if mask is None:
+        return in_tens.mean([2,3],keepdim=keepdim)
+    mask_resized = nn.functional.interpolate(mask, size=[in_tens.size(2), in_tens.size(3)])
+    num_valid = torch.sum(mask_resized)
+    return torch.sum(in_tens * mask_resized) / (num_valid + 1e-8)
 
 def upsample(in_tens, out_HW=(64,64)): # assumes scale factor is same for H and W
     in_H, in_W = in_tens.shape[2], in_tens.shape[3]
@@ -77,7 +85,8 @@ class LPIPS(nn.Module):
         if(eval_mode):
             self.eval()
 
-    def forward(self, in0, in1, retPerLayer=False, normalize=False):
+    def forward(self, in0, in1, mask=None, retPerLayer=False, normalize=False):
+        """mask: 0 or 1"""
         if normalize: # turn on this flag if input is [0,1] so it can be adjusted to [-1, +1]
             in0 = 2 * in0  - 1
             in1 = 2 * in1  - 1
@@ -88,19 +97,19 @@ class LPIPS(nn.Module):
         feats0, feats1, diffs = {}, {}, {}
 
         for kk in range(self.L):
-            feats0[kk], feats1[kk] = lpips.normalize_tensor(outs0[kk]), lpips.normalize_tensor(outs1[kk])
+            feats0[kk], feats1[kk] = normalize_tensor(outs0[kk]), normalize_tensor(outs1[kk])
             diffs[kk] = (feats0[kk]-feats1[kk])**2
 
         if(self.lpips):
             if(self.spatial):
                 res = [upsample(self.lins[kk](diffs[kk]), out_HW=in0.shape[2:]) for kk in range(self.L)]
             else:
-                res = [spatial_average(self.lins[kk](diffs[kk]), keepdim=True) for kk in range(self.L)]
+                res = [spatial_average(self.lins[kk](diffs[kk]), mask, keepdim=True) for kk in range(self.L)]
         else:
             if(self.spatial):
                 res = [upsample(diffs[kk].sum(dim=1,keepdim=True), out_HW=in0.shape[2:]) for kk in range(self.L)]
             else:
-                res = [spatial_average(diffs[kk].sum(dim=1,keepdim=True), keepdim=True) for kk in range(self.L)]
+                res = [spatial_average(diffs[kk].sum(dim=1,keepdim=True), mask, keepdim=True) for kk in range(self.L)]
 
         val = res[0]
         for l in range(1,self.L):
@@ -189,8 +198,8 @@ class L2(FakeNet):
             value = torch.mean(torch.mean(torch.mean((in0-in1)**2,dim=1).view(N,1,X,Y),dim=2).view(N,1,1,Y),dim=3).view(N)
             return value
         elif(self.colorspace=='Lab'):
-            value = lpips.l2(lpips.tensor2np(lpips.tensor2tensorlab(in0.data,to_norm=False)), 
-                lpips.tensor2np(lpips.tensor2tensorlab(in1.data,to_norm=False)), range=100.).astype('float')
+            value = l2(tensor2np(tensor2tensorlab(in0.data,to_norm=False)), 
+                tensor2np(tensor2tensorlab(in1.data,to_norm=False)), range=100.).astype('float')
             ret_var = Variable( torch.Tensor((value,) ) )
             if(self.use_gpu):
                 ret_var = ret_var.cuda()
@@ -202,10 +211,10 @@ class DSSIM(FakeNet):
         assert(in0.size()[0]==1) # currently only supports batchSize 1
 
         if(self.colorspace=='RGB'):
-            value = lpips.dssim(1.*lpips.tensor2im(in0.data), 1.*lpips.tensor2im(in1.data), range=255.).astype('float')
+            value = dssim(1.*tensor2im(in0.data), 1.*tensor2im(in1.data), range=255.).astype('float')
         elif(self.colorspace=='Lab'):
-            value = lpips.dssim(lpips.tensor2np(lpips.tensor2tensorlab(in0.data,to_norm=False)), 
-                lpips.tensor2np(lpips.tensor2tensorlab(in1.data,to_norm=False)), range=100.).astype('float')
+            value = dssim(tensor2np(tensor2tensorlab(in0.data,to_norm=False)), 
+                tensor2np(tensor2tensorlab(in1.data,to_norm=False)), range=100.).astype('float')
         ret_var = Variable( torch.Tensor((value,) ) )
         if(self.use_gpu):
             ret_var = ret_var.cuda()
