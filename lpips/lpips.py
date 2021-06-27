@@ -12,12 +12,15 @@ import torch.nn
 # import lpips
 from . import *
 
-def spatial_average(in_tens, mask=None, keepdim=True):
+def spatial_average(in_tens, mask=None, reduction='mean', keepdim=True):
     """
     mask: None or (B, 1, H, W)
     """
     if mask is None:
-        return in_tens.mean([2,3],keepdim=keepdim)
+        if reduction=='mean':
+            return in_tens.mean([2,3],keepdim=keepdim)
+        elif reduction=='none':
+            return in_tens
     mask_resized = nn.functional.interpolate(mask, size=[in_tens.size(2), in_tens.size(3)])
     num_valid = torch.sum(mask_resized)
     return torch.sum(in_tens * mask_resized) / (num_valid + 1e-8)
